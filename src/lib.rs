@@ -1,6 +1,6 @@
 extern crate byteorder;
 
-use std::io;
+use std::{io, mem};
 use std::collections::BTreeMap;
 use std::borrow::Borrow;
 use std::marker::PhantomData;
@@ -24,7 +24,7 @@ pub struct ChunkWriter<'a, K: 'a, T: 'a>
 {
     inner: &'a mut Writer<K, T>,
     start: usize,
-    key: Option<K>,
+    key: mem::ManuallyDrop<K>,
 }
 
 impl<'a, K, T> io::Write for ChunkWriter<'a, K, T>
@@ -43,7 +43,8 @@ impl<'a, K, T> Drop for ChunkWriter<'a, K, T>
     where K: Key
 {
     fn drop(&mut self) {
-        self.inner.chunks.insert(self.key.take().unwrap(), (self.start, self.inner.cursor));
+        let key = unsafe { mem::replace::<K>(&mut self.key, mem::uninitialized()) };
+        self.inner.chunks.insert(key, (self.start, self.inner.cursor));
     }
 }
 
@@ -59,7 +60,7 @@ impl<K, T> Writer<K, T>
     }
 
     pub fn push<'a>(&'a mut self, key: K) -> ChunkWriter<'a, K, T> {
-        ChunkWriter { key: Some(key), start: self.cursor, inner: self }
+        ChunkWriter { key: mem::ManuallyDrop::new(key), start: self.cursor, inner: self }
     }
 
     pub fn finish(mut self) -> io::Result<()> {
