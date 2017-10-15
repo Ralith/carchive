@@ -114,6 +114,8 @@ impl<K, T> Reader<K, T>
         None
     }
 
+    pub fn index(&self) -> IndexIter<K, T> { IndexIter { reader: self, cursor: 0 } }
+
     // FIXME: &[u8; K::SIZE]
     fn index_entry(&self, i: u64) -> (&[u8], u64, u64) {
         let data = self.data.as_ref();
@@ -133,5 +135,23 @@ impl<K, T> Reader<K, T>
     fn key_size(&self) -> u32 {
         let data = self.data.as_ref();
         LittleEndian::read_u32(&data[data.len() - 4..])
+    }
+}
+
+pub struct IndexIter<'a, K: 'a, T: 'a> {
+    reader: &'a Reader<K, T>,
+    cursor: u64,
+}
+
+impl<'a, K, T> Iterator for IndexIter<'a, K, T>
+    where T: AsRef<[u8]>, K: Key
+{
+    // FIXME: &'a [u8; K::SIZE]
+    type Item = (&'a [u8], u64, u64);
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor == self.reader.index_len() { return None; }
+        let result = self.reader.index_entry(self.cursor);
+        self.cursor += 1;
+        Some(result)
     }
 }
