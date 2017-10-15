@@ -93,7 +93,7 @@ impl<T, K> Reader<T, K>
 
     pub fn get(&self, key: &K) -> Option<&[u8]> {
         let key = key.borrow();
-        let mut i = LittleEndian::read_u64(key) % self.index_len();
+        let mut i = LittleEndian::read_u64(key) / (u64::max_value() / (self.index_len() - 1));
         if self.index_entry(i).0 <= key {
             while self.index_entry(i).0 <= key {
                 let (entry, start, len) = self.index_entry(i);
