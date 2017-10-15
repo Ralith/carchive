@@ -77,12 +77,12 @@ impl<K, T> Writer<K, T>
     }
 }
 
-pub struct Reader<T, K> {
+pub struct Reader<K, T> {
     data: T,
     _phantom: PhantomData<K>
 }
 
-impl<T, K> Reader<T, K>
+impl<K, T> Reader<K, T>
     where T: AsRef<[u8]>, K: Key
 {
     /// Returns None if key sizes don't match
