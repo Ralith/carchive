@@ -43,6 +43,7 @@ use failure::Fail;
 /// // ...
 /// writer.finish().unwrap();
 /// ```
+#[derive(Debug)]
 pub struct Writer<T> {
     inner: T,
     key_len: u32,
@@ -162,6 +163,7 @@ pub enum Error {
 /// let reader = carchive::Reader::new(25, &DATA).unwrap();
 /// assert_eq!(reader.get(b"key").unwrap(), b"value");
 /// ```
+#[derive(Debug, Clone)]
 pub struct Reader<T> {
     data: T,
     key_len: u32,
