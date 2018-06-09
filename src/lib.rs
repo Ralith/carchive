@@ -11,7 +11,8 @@
 //!     writer.finish(&[]).unwrap();
 //! }
 //!
-//! let reader = carchive::Reader::new(3, &buf).unwrap();
+//! let reader = carchive::Reader::new(&buf).unwrap();
+//! assert_eq!(reader.key_len(), 3);
 //! assert_eq!(reader.get(b"key").unwrap(), b"value");
 //! assert!(reader.get(b"bad").is_none());
 //! ```
@@ -86,6 +87,8 @@ impl<T> Writer<T>
 
     /// Set the `key` to use for previously written data, and begin a new value.
     ///
+    /// For fast random access, keys must be approximately uniformly distributed. Hashes make good keys for this reason.
+    ///
     /// This is done after writing a value so that the the key can be computed from the value (for example, by a hash
     /// function) without multiple passes.
     pub fn finish_value(&mut self, key: &[u8]) {
@@ -99,6 +102,9 @@ impl<T> Writer<T>
         self.values.contains_key(key)
     }
 
+    /// Length of keys used by this archive.
+    pub fn key_len(&self) -> u32 { self.key_len }
+
     /// Write out the archive index and headers.
     ///
     /// `extensions` can be used to store custom unstructured header data. Note that for extension data to be
@@ -111,6 +117,7 @@ impl<T> Writer<T>
             self.inner.write_u64::<LittleEndian>(len as u64)?;
         }
         self.inner.write_u64::<LittleEndian>(self.values.len() as u64)?;
+        self.inner.write_u32::<LittleEndian>(self.key_len)?;
         Ok(())
     }
 }
@@ -121,12 +128,13 @@ impl Writer<File> {
     /// This loads the index of an existing archive fully into memory, truncates it from the file, and allows new data
     /// to be appended to the end. Modifying or removing existing data is not supported. If you re-write the same key
     /// with a new value, the storage for the old value will remain allocated.
-    pub fn open(key_len: u32, mut file: File) -> io::Result<Self> {
+    pub fn open(mut file: File) -> io::Result<Self> {
         let len = file.metadata()?.len();
         if len < 8 { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat())); }
-        file.seek(SeekFrom::Start(len-8))?;
+        file.seek(SeekFrom::Start(len-12))?;
         let index_len = file.read_u64::<LittleEndian>()?;
-        let index_start = len - 8 - index_len * (key_len as u64 + 16);
+        let key_len = file.read_u32::<LittleEndian>()?;
+        let index_start = len - 4 - 8 - index_len * (key_len as u64 + 16);
         file.seek(SeekFrom::Start(index_start))?;
         let mut values = BTreeMap::new();
         for _ in 0..index_len {
@@ -164,13 +172,12 @@ pub enum Error {
 /// ```no_run
 /// # const DATA: &[u8] = &[];
 ///
-/// let reader = carchive::Reader::new(25, &DATA).unwrap();
+/// let reader = carchive::Reader::new(&DATA).unwrap();
 /// assert_eq!(reader.get(b"key").unwrap(), b"value");
 /// ```
 #[derive(Debug, Clone)]
 pub struct Reader<T> {
     data: T,
-    key_len: u32,
 }
 
 impl<T> Reader<T> {
@@ -184,10 +191,10 @@ impl<T> Reader<T>
     where T: AsRef<[u8]>
 {
     /// Create a `Reader` for an in-memory archive.
-    pub fn new(key_len: u32, data: T) -> Result<Self, Error> {
+    pub fn new(data: T) -> Result<Self, Error> {
         let len = data.as_ref().len();
         if len < 8 { return Err(Error::Header); }
-        let result = Self { data, key_len };
+        let result = Self { data };
         if (len as u64) < result.header_size() { return Err(Error::Header); }
         for i in 0..result.index_len() {
             let (_, start, entry_len) = result.index_entry(i);
@@ -202,7 +209,7 @@ impl<T> Reader<T>
 
     /// Find the value for a specific key.
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
-        assert_eq!(key.len(), self.key_len as usize, "unexpected key size");
+        assert_eq!(key.len(), self.key_len() as usize, "unexpected key size");
         let n = self.index_len();
         let mut i = match n {
             0 => { return None; }
@@ -250,13 +257,13 @@ impl<T> Reader<T>
         Some(&self.data.as_ref()[start as usize..end as usize])
     }
 
-    fn header_size(&self) -> u64 { self.index_len() * (self.key_len as u64 + 16) + 8 }
+    fn header_size(&self) -> u64 { self.index_len() * (self.key_len() as u64 + 16) + 8 + 4 }
 
     fn index_entry(&self, i: u64) -> (&[u8], u64, u64) {
-        let key_len = self.key_len as usize;
+        let key_len = self.key_len() as usize;
         let data = self.data.as_ref();
         let row_size = key_len + 16;
-        let index_end = data.len() - 8;
+        let index_end = data.len() - 8 - 4;
         let index_start = index_end - self.index_len() as usize * row_size;
         let index = &data[index_start..index_end];
         let entry = &index[i as usize * row_size..(i as usize + 1)*row_size];
@@ -265,7 +272,13 @@ impl<T> Reader<T>
 
     fn index_len(&self) -> u64 {
         let data = self.data.as_ref();
-        LittleEndian::read_u64(&data[data.len() - 8..])
+        LittleEndian::read_u64(&data[data.len() - 12..])
+    }
+
+    /// Length of keys used by this archive.
+    pub fn key_len(&self) -> u32 {
+        let data = self.data.as_ref();
+        LittleEndian::read_u32(&data[data.len() - 4..])
     }
 
     /// Walk the archive's contents.
@@ -320,8 +333,9 @@ mod test {
             writer.finish(b"ext").unwrap();
         }
 
-        let reader = Reader::new(3, &buf).unwrap();
+        let reader = Reader::new(&buf).unwrap();
 
+        assert_eq!(reader.key_len(), 3);
         assert_eq!(reader.extensions(3).unwrap(), b"ext");
         assert_eq!(reader.get(b"abc").unwrap(), b"123");
         assert_eq!(reader.get(b"def").unwrap(), b"456");
@@ -335,6 +349,6 @@ mod test {
 
     #[test]
     fn malformed_header() {
-        assert_eq!(Reader::new(42, b"test").unwrap_err(), Error::Header);
+        assert_eq!(Reader::new(b"test").unwrap_err(), Error::Header);
     }
 }
