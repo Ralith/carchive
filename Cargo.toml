@@ -1,7 +1,13 @@
 [package]
-name = "sg-car"
-version = "0.0.0"
+name = "content-archive"
+version = "0.1.0"
 authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
+description = "Content-addressed archive coding"
 
 [dependencies]
 byteorder = "1.1"
+failure = "0.1.1"
+
+[dev-dependencies]
+structopt = "0.2"
+data-encoding = "2.1.1"
