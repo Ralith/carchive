@@ -8,7 +8,7 @@
 //!     let mut writer = carchive::Writer::new(3, &mut buf);
 //!     writer.write_all(b"value").unwrap();
 //!     writer.finish_value(b"key");
-//!     writer.finish().unwrap();
+//!     writer.finish(&[]).unwrap();
 //! }
 //!
 //! let reader = carchive::Reader::new(3, &buf).unwrap();
@@ -41,7 +41,7 @@ use failure::Fail;
 /// writer.write_all(b"value1").unwrap();
 /// writer.finish_value(b"key1");
 /// // ...
-/// writer.finish().unwrap();
+/// writer.finish(&[]).unwrap();
 /// ```
 #[derive(Debug)]
 pub struct Writer<T> {
@@ -100,7 +100,11 @@ impl<T> Writer<T>
     }
 
     /// Write out the archive index and headers.
-    pub fn finish(mut self) -> io::Result<()> {
+    ///
+    /// `extensions` can be used to store custom unstructured header data. Note that for extension data to be
+    /// accessible, it should be either fixed length or end with a fixed-size length tag.
+    pub fn finish(mut self, extensions: &[u8]) -> io::Result<()> {
+        self.inner.write_all(extensions)?;
         for (key, &(start, len)) in &self.values {
             self.inner.write_all(key)?;
             self.inner.write_u64::<LittleEndian>(start as u64)?;
@@ -144,7 +148,7 @@ impl Writer<File> {
     }
 }
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Fail, Eq, PartialEq)]
 /// Error generated when processing a malformed archive.
 pub enum Error {
     /// Malformed archive header.
@@ -184,7 +188,7 @@ impl<T> Reader<T>
         let len = data.as_ref().len();
         if len < 8 { return Err(Error::Header); }
         let result = Self { data, key_len };
-        if (len as u64) < result.index_len() * (result.key_len as u64 + 16) + 4 { return Err(Error::Header); }
+        if (len as u64) < result.header_size() { return Err(Error::Header); }
         for i in 0..result.index_len() {
             let (_, start, entry_len) = result.index_entry(i);
             if let Some(x) = start.checked_add(entry_len) {
@@ -236,6 +240,17 @@ impl<T> Reader<T>
             }
         }
     }
+
+    /// Access the last `offset` bytes of extension headers.
+    ///
+    /// Returns `None` if this would read before the start of the archive.
+    pub fn extensions(&self, offset: usize) -> Option<&[u8]> {
+        let end = (self.data.as_ref().len() as u64).checked_sub(self.header_size())?;
+        let start = end.checked_sub(offset as u64)?;
+        Some(&self.data.as_ref()[start as usize..end as usize])
+    }
+
+    fn header_size(&self) -> u64 { self.index_len() * (self.key_len as u64 + 16) + 8 }
 
     fn index_entry(&self, i: u64) -> (&[u8], u64, u64) {
         let key_len = self.key_len as usize;
@@ -302,11 +317,12 @@ mod test {
                 writer.write_all(value).unwrap();
                 writer.finish_value(key);
             }
-            writer.finish().unwrap();
+            writer.finish(b"ext").unwrap();
         }
 
         let reader = Reader::new(3, &buf).unwrap();
 
+        assert_eq!(reader.extensions(3).unwrap(), b"ext");
         assert_eq!(reader.get(b"abc").unwrap(), b"123");
         assert_eq!(reader.get(b"def").unwrap(), b"456");
         assert_eq!(reader.get(b"ghi").unwrap(), b"789");
@@ -315,5 +331,10 @@ mod test {
         assert!(reader.get(b"jkl").is_none());
 
         assert_eq!(reader.iter().collect::<Vec<_>>(), VALUES);
+    }
+
+    #[test]
+    fn malformed_header() {
+        assert_eq!(Reader::new(42, b"test").unwrap_err(), Error::Header);
     }
 }

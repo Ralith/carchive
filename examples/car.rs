@@ -69,7 +69,7 @@ fn main() -> io::Result<()> {
             let stdin = io::stdin();
             io::copy(&mut stdin.lock(), &mut writer)?;
             writer.finish_value(&key);
-            writer.finish()?;
+            writer.finish(&[])?;
         }
         Command::Ls => {
             let data = fs::read(&opt.path)?;
