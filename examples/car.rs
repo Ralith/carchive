@@ -1,4 +1,4 @@
-extern crate content_archive as car;
+extern crate carchive;
 extern crate data_encoding;
 #[macro_use]
 extern crate structopt;
@@ -49,7 +49,7 @@ fn main() -> io::Result<()> {
             let mut key = BASE32_NOPAD.decode(key.as_bytes()).unwrap();
             key.truncate(opt.key_len as usize);
             let data = fs::read(&opt.path)?;
-            let reader = car::Reader::new(opt.key_len, data).expect("invalid car file");
+            let reader = carchive::Reader::new(opt.key_len, data).expect("invalid car file");
             if let Some(mut value) = reader.get(&key) {
                 let stdout = io::stdout();
                 io::copy(&mut value, &mut stdout.lock())?;
@@ -62,8 +62,8 @@ fn main() -> io::Result<()> {
             let mut key = BASE32_NOPAD.decode(key.as_bytes()).unwrap();
             key.truncate(opt.key_len as usize);
             let mut writer = match OpenOptions::new().read(true).write(true).open(&opt.path) {
-                Ok(x) => car::Writer::open(opt.key_len, x)?,
-                Err(ref e) if e.kind() == io::ErrorKind::NotFound => car::Writer::new(opt.key_len, File::create(&opt.path)?),
+                Ok(x) => carchive::Writer::open(opt.key_len, x)?,
+                Err(ref e) if e.kind() == io::ErrorKind::NotFound => carchive::Writer::new(opt.key_len, File::create(&opt.path)?),
                 Err(e) => { return Err(e); }
             };
             let stdin = io::stdin();
@@ -73,7 +73,7 @@ fn main() -> io::Result<()> {
         }
         Command::Ls => {
             let data = fs::read(&opt.path)?;
-            let reader = car::Reader::new(opt.key_len, data).expect("invalid car file");
+            let reader = carchive::Reader::new(opt.key_len, data).expect("invalid car file");
             for (key, value) in &reader {
                 println!("{} {}", BASE32_NOPAD.encode(key), value.len());
             }

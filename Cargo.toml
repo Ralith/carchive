@@ -1,5 +1,5 @@
 [package]
-name = "content-archive"
+name = "carchive"
 version = "0.1.0"
 authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
 description = "Content-addressed archive coding"

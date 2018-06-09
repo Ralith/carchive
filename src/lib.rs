@@ -5,13 +5,13 @@
 //!
 //! let mut buf = Vec::new();
 //! {
-//!     let mut writer = content_archive::Writer::new(3, &mut buf);
+//!     let mut writer = carchive::Writer::new(3, &mut buf);
 //!     writer.write_all(b"value").unwrap();
 //!     writer.finish_value(b"key");
 //!     writer.finish().unwrap();
 //! }
 //!
-//! let reader = content_archive::Reader::new(3, &buf).unwrap();
+//! let reader = carchive::Reader::new(3, &buf).unwrap();
 //! assert_eq!(reader.get(b"key").unwrap(), b"value");
 //! assert!(reader.get(b"bad").is_none());
 //! ```
@@ -37,7 +37,7 @@ use failure::Fail;
 /// use std::fs::File;
 /// use std::io::Write;
 ///
-/// let mut writer = content_archive::Writer::new(4, File::create("example.car").unwrap());
+/// let mut writer = carchive::Writer::new(4, File::create("example.car").unwrap());
 /// writer.write_all(b"value1").unwrap();
 /// writer.finish_value(b"key1");
 /// // ...
@@ -152,7 +152,7 @@ pub enum Error {
 /// ```no_run
 /// # const DATA: &[u8] = &[];
 ///
-/// let reader = content_archive::Reader::new(25, &DATA).unwrap();
+/// let reader = carchive::Reader::new(25, &DATA).unwrap();
 /// assert_eq!(reader.get(b"key").unwrap(), b"value");
 /// ```
 pub struct Reader<T> {
