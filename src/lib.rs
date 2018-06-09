@@ -63,6 +63,13 @@ impl<T> io::Write for Writer<T>
     fn flush(&mut self) -> io::Result<()> { self.inner.flush() }
 }
 
+impl<T> Writer<T> {
+    /// Access the inner value
+    pub fn get_ref(&self) -> &T { &self.inner }
+    /// Access the inner value mutably
+    pub fn get_mut(&mut self) -> &mut T { &mut self.inner }
+}
+
 impl<T> Writer<T>
     where T: io::Write
 {
@@ -158,6 +165,13 @@ pub enum Error {
 pub struct Reader<T> {
     data: T,
     key_len: u32,
+}
+
+impl<T> Reader<T> {
+    /// Access the inner value
+    pub fn get_ref(&self) -> &T { &self.data }
+    /// Access the inner value mutably
+    pub fn get_mut(&mut self) -> &mut T { &mut self.data }
 }
 
 impl<T> Reader<T>
