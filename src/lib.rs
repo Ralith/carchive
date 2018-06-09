@@ -11,9 +11,7 @@
 //!     writer.finish().unwrap();
 //! }
 //!
-//! let reader = content_archive::Reader::new(&buf).unwrap();
-//! assert_eq!(reader.key_len(), 3);
-//!
+//! let reader = content_archive::Reader::new(3, &buf).unwrap();
 //! assert_eq!(reader.get(b"key").unwrap(), b"value");
 //! assert!(reader.get(b"bad").is_none());
 //! ```
@@ -39,7 +37,7 @@ use failure::Fail;
 /// use std::fs::File;
 /// use std::io::Write;
 ///
-/// let mut writer = content_archive::Writer::new(25, File::create("example.car").unwrap());
+/// let mut writer = content_archive::Writer::new(4, File::create("example.car").unwrap());
 /// writer.write_all(b"value1").unwrap();
 /// writer.finish_value(b"key1");
 /// // ...
@@ -101,7 +99,6 @@ impl<T> Writer<T>
             self.inner.write_u64::<LittleEndian>(len as u64)?;
         }
         self.inner.write_u64::<LittleEndian>(self.values.len() as u64)?;
-        self.inner.write_u32::<LittleEndian>(self.key_len)?;
         Ok(())
     }
 }
@@ -114,12 +111,10 @@ impl Writer<File> {
     /// with a new value, the storage for the old value will remain allocated.
     pub fn open(key_len: u32, mut file: File) -> io::Result<Self> {
         let len = file.metadata()?.len();
-        if len < 12 { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat())); }
-        file.seek(SeekFrom::Start(len-12))?;
+        if len < 8 { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat())); }
+        file.seek(SeekFrom::Start(len-8))?;
         let index_len = file.read_u64::<LittleEndian>()?;
-        let file_key_len = file.read_u32::<LittleEndian>()?;
-        if key_len != file_key_len { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat())); }
-        let index_start = len - 12 - index_len * (key_len as u64 + 16);
+        let index_start = len - 8 - index_len * (key_len as u64 + 16);
         file.seek(SeekFrom::Start(index_start))?;
         let mut values = BTreeMap::new();
         for _ in 0..index_len {
@@ -157,22 +152,23 @@ pub enum Error {
 /// ```no_run
 /// # const DATA: &[u8] = &[];
 ///
-/// let reader = content_archive::Reader::new(&DATA).unwrap();
+/// let reader = content_archive::Reader::new(25, &DATA).unwrap();
 /// assert_eq!(reader.get(b"key").unwrap(), b"value");
 /// ```
 pub struct Reader<T> {
     data: T,
+    key_len: u32,
 }
 
 impl<T> Reader<T>
     where T: AsRef<[u8]>
 {
     /// Create a `Reader` for an in-memory archive.
-    pub fn new(data: T) -> Result<Self, Error> {
+    pub fn new(key_len: u32, data: T) -> Result<Self, Error> {
         let len = data.as_ref().len();
-        if len < 12 { return Err(Error::Header); }
-        let result = Self { data };
-        if (len as u64) < result.index_len() * (result.key_len() as u64 + 16) + 4 { return Err(Error::Header); }
+        if len < 8 { return Err(Error::Header); }
+        let result = Self { data, key_len };
+        if (len as u64) < result.index_len() * (result.key_len as u64 + 16) + 4 { return Err(Error::Header); }
         for i in 0..result.index_len() {
             let (_, start, entry_len) = result.index_entry(i);
             if let Some(x) = start.checked_add(entry_len) {
@@ -186,7 +182,7 @@ impl<T> Reader<T>
 
     /// Find the value for a specific key.
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
-        assert_eq!(key.len(), self.key_len() as usize, "unexpected key size");
+        assert_eq!(key.len(), self.key_len as usize, "unexpected key size");
         let n = self.index_len();
         let mut i = match n {
             0 => { return None; }
@@ -226,10 +222,10 @@ impl<T> Reader<T>
     }
 
     fn index_entry(&self, i: u64) -> (&[u8], u64, u64) {
-        let key_len = self.key_len() as usize;
+        let key_len = self.key_len as usize;
         let data = self.data.as_ref();
         let row_size = key_len + 16;
-        let index_end = data.len() - 12;
+        let index_end = data.len() - 8;
         let index_start = index_end - self.index_len() as usize * row_size;
         let index = &data[index_start..index_end];
         let entry = &index[i as usize * row_size..(i as usize + 1)*row_size];
@@ -238,13 +234,7 @@ impl<T> Reader<T>
 
     fn index_len(&self) -> u64 {
         let data = self.data.as_ref();
-        LittleEndian::read_u64(&data[data.len() - 12..data.len() - 4])
-    }
-
-    /// Get the length of keys in this archive.
-    pub fn key_len(&self) -> u32 {
-        let data = self.data.as_ref();
-        LittleEndian::read_u32(&data[data.len() - 4..])
+        LittleEndian::read_u64(&data[data.len() - 8..])
     }
 
     /// Walk the archive's contents.
@@ -299,8 +289,7 @@ mod test {
             writer.finish().unwrap();
         }
 
-        let reader = Reader::new(&buf).unwrap();
-        assert_eq!(reader.key_len(), 3);
+        let reader = Reader::new(3, &buf).unwrap();
 
         assert_eq!(reader.get(b"abc").unwrap(), b"123");
         assert_eq!(reader.get(b"def").unwrap(), b"456");
