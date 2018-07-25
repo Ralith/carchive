@@ -123,12 +123,12 @@ impl<T> Writer<T>
 }
 
 impl Writer<File> {
-    /// Open an existing file for appending.
+    /// Open an existing file for appending, returning any pre-existing extension data alongside.
     ///
     /// This loads the index of an existing archive fully into memory, truncates it from the file, and allows new data
     /// to be appended to the end. Modifying or removing existing data is not supported. If you re-write the same key
     /// with a new value, the storage for the old value will remain allocated.
-    pub fn open(mut file: File) -> io::Result<Self> {
+    pub fn open(mut file: File) -> io::Result<(Self, Vec<u8>)> {
         let len = file.metadata()?.len();
         if len < 8 { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat())); }
         file.seek(SeekFrom::Start(len-12))?;
@@ -137,22 +137,28 @@ impl Writer<File> {
         let index_start = len - 4 - 8 - index_len * (key_len as u64 + 16);
         file.seek(SeekFrom::Start(index_start))?;
         let mut values = BTreeMap::new();
+        let mut end = 0;
         for _ in 0..index_len {
             let mut key = vec![0; key_len as usize];
             file.read_exact(&mut key[..])?;
             let start = file.read_u64::<LittleEndian>()?;
             let len = file.read_u64::<LittleEndian>()?;
             values.insert(key.into(), (start, len));
+            end = end.max(start + len);
         }
-        file.seek(SeekFrom::Start(index_start))?;
-        file.set_len(index_start)?;
-        Ok(Self {
+        // We truncate to end instead of index_start to avoid dead extension data
+        file.seek(SeekFrom::Start(end))?;
+        let mut ext = vec![0; (index_start - end) as usize];
+        file.read_exact(&mut ext[..])?;
+        file.seek(SeekFrom::Start(end))?;
+        file.set_len(end)?;
+        Ok((Self {
             inner: file,
             key_len,
             value_end: index_start,
             cursor: index_start,
             values,
-        })
+        }, ext))
     }
 }
 

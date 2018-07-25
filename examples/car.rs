@@ -70,7 +70,7 @@ fn main() -> io::Result<()> {
             let mut extensions = extensions.map(|x| HEXLOWER_PERMISSIVE.decode(x.as_bytes()).unwrap());
             key.truncate(opt.key_len as usize);
             let mut writer = match OpenOptions::new().read(true).write(true).open(&opt.path) {
-                Ok(x) => carchive::Writer::open(x)?,
+                Ok(x) => carchive::Writer::open(x)?.0,
                 Err(ref e) if e.kind() == io::ErrorKind::NotFound => carchive::Writer::new(opt.key_len, File::create(&opt.path)?),
                 Err(e) => { return Err(e); }
             };
