@@ -199,16 +199,11 @@ impl<T> Reader<T> {
     pub fn get_mut(&mut self) -> &mut T { &mut self.data }
 }
 
-// If keys are lexically ordered random bytes, then we can interpret a key as an over-precise approximation of its own
-// position in the index. This is the formula to discard the excess precision, yielding an approximate position in the
-// index.
-fn guess_index(key: &[u8], n: u64) -> u64 {
-    if n == 1 { return 0; }
+fn key_to_u64(key: &[u8]) -> u64 {
     let mut padded = [0; 8];
     let len = key.len().min(8);
     padded[0..len].copy_from_slice(&key[0..len]);
-    let divisor = u64::max_value() / n;
-    BigEndian::read_u64(&padded) / (divisor + 1)
+    BigEndian::read_u64(&padded)
 }
 
 impl<T> Reader<T>
@@ -237,39 +232,27 @@ impl<T> Reader<T>
     /// # Panics
     /// - if `key.len() != self.key_len()`
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
-        assert_eq!(key.len(), self.key_len() as usize, "unexpected key size");
-        let n = self.len();
-        if n == 0 { return None; }
-        let mut i = guess_index(key, n);
-        // Given an approximate position i, scan away from the error until we find the desired entry or have determined
-        // that it is not present.
-        if self.index_entry(i).0 <= key {
-            // Key is at or following this entry
-            loop {
-                let (entry, start, len) = self.index_entry(i);
-                match entry.cmp(key) {
-                    Ordering::Less => {
-                        i += 1;
-                        if i == n { return None; } // No more entries
-                    }
-                    Ordering::Equal => { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
-                    Ordering::Greater => { return None; } // All remaining entries are guaranteed not to match
-                }
-            }
-        } else {
-            // Key is before this entry
-            loop {
-                let (entry, start, len) = self.index_entry(i);
-                match entry.cmp(key) {
-                    Ordering::Greater => {
-                        if i == 0 { return None; } // No more entries
-                        i -= 1;
-                    }
-                    Ordering::Equal => { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
-                    Ordering::Less => { return None; } // All remaining entries are guaranteed not to match
-                }
+        assert_eq!(key.len(), self.key_len() as usize, "key size mismatch");
+        if self.len() == 0 { return None; }
+        let mut high = self.len() - 1;
+        let mut low = 0;
+        let approx_key = key_to_u64(key);
+
+        while high != low {
+            let approx_low = key_to_u64(self.index_entry(low).0);
+            let approx_high = key_to_u64(self.index_entry(high).0);
+            if approx_key < approx_low || approx_key > approx_high { return None; }
+            let mid = low + (approx_key - approx_low) / ((approx_high - approx_low) / (high - low));
+            let (entry, start, len) = self.index_entry(mid);
+            match entry.cmp(key) {
+                Ordering::Less => { low = mid + 1; }
+                Ordering::Greater => { high = mid - 1; }
+                Ordering::Equal => { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
             }
         }
+        let (entry, start, len) = self.index_entry(low);
+        if entry == key { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
+        None
     }
 
     /// Access the last `offset` bytes of extension headers.
@@ -376,21 +359,5 @@ mod test {
     #[test]
     fn malformed_header() {
         assert_eq!(Reader::new(b"test").unwrap_err(), Error::Header);
-    }
-
-    #[test]
-    fn index_guessing() {
-        assert_eq!(guess_index(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 2), 0);
-        assert_eq!(guess_index(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 2), 0);
-        assert_eq!(guess_index(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 2), 1);
-        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe], 2), 1);
-        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 2), 1);
-
-        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe], 4), 3);
-
-        assert_eq!(guess_index(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 8), 0);
-        assert_eq!(guess_index(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01], 8), 0);
-        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe], 8), 7);
-        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 8), 7);
     }
 }
