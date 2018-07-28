@@ -29,7 +29,7 @@ use std::fs::File;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt, ByteOrder};
+use byteorder::{LittleEndian, BigEndian, WriteBytesExt, ReadBytesExt, ByteOrder};
 use failure::Fail;
 
 /// Archive encoder.
@@ -134,15 +134,21 @@ impl Writer<File> {
         file.seek(SeekFrom::Start(len-12))?;
         let index_len = file.read_u64::<LittleEndian>()?;
         let key_len = file.read_u32::<LittleEndian>()?;
-        let index_start = len - 4 - 8 - index_len * (key_len as u64 + 16);
+        let index_start = index_len.checked_mul(key_len as u64 + 16)
+            .and_then(|index_size| index_size.checked_add(4 + 8))
+            .and_then(|header_size| len.checked_sub(header_size))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat()))?;
         file.seek(SeekFrom::Start(index_start))?;
         let mut values = BTreeMap::new();
         let mut end = 0;
-        for _ in 0..index_len {
+        for i in 0..index_len {
             let mut key = vec![0; key_len as usize];
             file.read_exact(&mut key[..])?;
             let start = file.read_u64::<LittleEndian>()?;
             let len = file.read_u64::<LittleEndian>()?;
+            if start.checked_add(len).map_or(true, |x| x > index_start) {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Index(i).compat()));
+            }
             values.insert(key.into(), (start, len));
             end = end.max(start + len);
         }
@@ -193,6 +199,18 @@ impl<T> Reader<T> {
     pub fn get_mut(&mut self) -> &mut T { &mut self.data }
 }
 
+// If keys are lexically ordered random bytes, then we can interpret a key as an over-precise approximation of its own
+// position in the index. This is the formula to discard the excess precision, yielding an approximate position in the
+// index.
+fn guess_index(key: &[u8], n: u64) -> u64 {
+    if n == 1 { return 0; }
+    let mut padded = [0; 8];
+    let len = key.len().min(8);
+    padded[0..len].copy_from_slice(&key[0..len]);
+    let divisor = u64::max_value() / n;
+    BigEndian::read_u64(&padded) / (divisor + 1)
+}
+
 impl<T> Reader<T>
     where T: AsRef<[u8]>
 {
@@ -201,11 +219,12 @@ impl<T> Reader<T>
         let len = data.as_ref().len();
         if len < 8 { return Err(Error::Header); }
         let result = Self { data };
-        if (len as u64) < result.header_size() { return Err(Error::Header); }
-        for i in 0..result.index_len() {
+        let header_size = result.header_size().ok_or(Error::Header)?;
+        if header_size > len as u64 { return Err(Error::Header); }
+        for i in 0..result.len() {
             let (_, start, entry_len) = result.index_entry(i);
             if let Some(x) = start.checked_add(entry_len) {
-                if x > len as u64 { return Err(Error::Index(i)); }
+                if x > (len as u64 - header_size) { return Err(Error::Index(i)); }
             } else {
                 return Err(Error::Index(i));
             }
@@ -214,41 +233,40 @@ impl<T> Reader<T>
     }
 
     /// Find the value for a specific key.
+    ///
+    /// # Panics
+    /// - if `key.len() != self.key_len()`
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
         assert_eq!(key.len(), self.key_len() as usize, "unexpected key size");
-        let n = self.index_len();
-        let mut i = match n {
-            0 => { return None; }
-            1 => { 0 }
-            _ => {
-                let mut padded = [0; 8];
-                let len = key.len().min(8);
-                padded[8-len..].copy_from_slice(&key[key.len()-len..]);
-                LittleEndian::read_u64(&padded) / (u64::max_value() / (n - 1))
-            }
-        };
+        let n = self.len();
+        if n == 0 { return None; }
+        let mut i = guess_index(key, n);
+        // Given an approximate position i, scan away from the error until we find the desired entry or have determined
+        // that it is not present.
         if self.index_entry(i).0 <= key {
+            // Key is at or following this entry
             loop {
                 let (entry, start, len) = self.index_entry(i);
                 match entry.cmp(key) {
                     Ordering::Less => {
                         i += 1;
-                        if i == n { return None; }
+                        if i == n { return None; } // No more entries
                     }
                     Ordering::Equal => { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
-                    Ordering::Greater => { return None; }
+                    Ordering::Greater => { return None; } // All remaining entries are guaranteed not to match
                 }
             }
         } else {
+            // Key is before this entry
             loop {
                 let (entry, start, len) = self.index_entry(i);
                 match entry.cmp(key) {
                     Ordering::Greater => {
-                        if i == 0 { return None; }
+                        if i == 0 { return None; } // No more entries
                         i -= 1;
                     }
                     Ordering::Equal => { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
-                    Ordering::Less => { return None; }
+                    Ordering::Less => { return None; } // All remaining entries are guaranteed not to match
                 }
             }
         }
@@ -258,25 +276,27 @@ impl<T> Reader<T>
     ///
     /// Returns `None` if this would read before the start of the archive.
     pub fn extensions(&self, offset: usize) -> Option<&[u8]> {
-        let end = (self.data.as_ref().len() as u64).checked_sub(self.header_size())?;
+        let end = (self.data.as_ref().len() as u64).checked_sub(self.header_size()?)?;
         let start = end.checked_sub(offset as u64)?;
         Some(&self.data.as_ref()[start as usize..end as usize])
     }
 
-    fn header_size(&self) -> u64 { self.index_len() * (self.key_len() as u64 + 16) + 8 + 4 }
+    /// Returns `None` if header size overflows
+    fn header_size(&self) -> Option<u64> { Some(self.len().checked_mul(self.key_len() as u64 + 16)?.checked_add(8 + 4)?) }
 
     fn index_entry(&self, i: u64) -> (&[u8], u64, u64) {
         let key_len = self.key_len() as usize;
         let data = self.data.as_ref();
         let row_size = key_len + 16;
         let index_end = data.len() - 8 - 4;
-        let index_start = index_end - self.index_len() as usize * row_size;
+        let index_start = index_end - self.len() as usize * row_size;
         let index = &data[index_start..index_end];
         let entry = &index[i as usize * row_size..(i as usize + 1)*row_size];
         (&entry[0..key_len], LittleEndian::read_u64(&entry[key_len..key_len+8]), LittleEndian::read_u64(&entry[key_len+8..key_len+16]))
     }
 
-    fn index_len(&self) -> u64 {
+    /// Number of key-value pairs in the archive.
+    pub fn len(&self) -> u64 {
         let data = self.data.as_ref();
         LittleEndian::read_u64(&data[data.len() - 12..])
     }
@@ -302,7 +322,7 @@ impl<'a, T> Iterator for Iter<'a, T>
 {
     type Item = (&'a [u8], &'a [u8]);
     fn next(&mut self) -> Option<Self::Item> {
-        if self.cursor == self.reader.index_len() { return None; }
+        if self.cursor == self.reader.len() { return None; }
         let (entry, start, len) = self.reader.index_entry(self.cursor);
         self.cursor += 1;
         Some((entry, &self.reader.data.as_ref()[start as usize..(start+len) as usize]))
@@ -356,5 +376,21 @@ mod test {
     #[test]
     fn malformed_header() {
         assert_eq!(Reader::new(b"test").unwrap_err(), Error::Header);
+    }
+
+    #[test]
+    fn index_guessing() {
+        assert_eq!(guess_index(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 2), 0);
+        assert_eq!(guess_index(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 2), 0);
+        assert_eq!(guess_index(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 2), 1);
+        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe], 2), 1);
+        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 2), 1);
+
+        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe], 4), 3);
+
+        assert_eq!(guess_index(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 8), 0);
+        assert_eq!(guess_index(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01], 8), 0);
+        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe], 8), 7);
+        assert_eq!(guess_index(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 8), 7);
     }
 }
