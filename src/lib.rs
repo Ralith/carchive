@@ -105,6 +105,12 @@ impl<T> Writer<T>
     /// Length of keys used by this archive.
     pub fn key_len(&self) -> u32 { self.key_len }
 
+    /// Compensate for all written data after the last `finish_value` call being discarded from the underlying
+    /// `io::Write`.
+    pub fn value_truncated(&mut self) {
+        self.cursor = self.value_end;
+    }
+
     /// Write out the archive index and headers.
     ///
     /// `extensions` can be used to store custom unstructured header data. Note that for extension data to be
@@ -161,10 +167,18 @@ impl Writer<File> {
         Ok((Self {
             inner: file,
             key_len,
-            value_end: index_start,
-            cursor: index_start,
+            value_end: end,
+            cursor: end,
             values,
         }, ext))
+    }
+
+    /// Discard data written since the last `finish_value`.
+    pub fn cancel_value(&mut self) -> io::Result<()> {
+        self.inner.seek(SeekFrom::Start(self.value_end))?;
+        self.inner.set_len(self.value_end)?;
+        self.value_truncated();
+        Ok(())
     }
 }
 
