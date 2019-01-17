@@ -22,7 +22,7 @@
 
 extern crate byteorder;
 #[macro_use]
-extern crate failure;
+extern crate err_derive;
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::fs::File;
@@ -30,7 +30,6 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use byteorder::{LittleEndian, BigEndian, WriteBytesExt, ReadBytesExt, ByteOrder};
-use failure::Fail;
 
 /// Archive encoder.
 ///
@@ -136,14 +135,14 @@ impl Writer<File> {
     /// with a new value, the storage for the old value will remain allocated.
     pub fn open(mut file: File) -> io::Result<(Self, Vec<u8>)> {
         let len = file.metadata()?.len();
-        if len < 8 { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat())); }
+        if len < 8 { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header)); }
         file.seek(SeekFrom::Start(len-12))?;
         let index_len = file.read_u64::<LittleEndian>()?;
         let key_len = file.read_u32::<LittleEndian>()?;
         let index_start = index_len.checked_mul(key_len as u64 + 16)
             .and_then(|index_size| index_size.checked_add(4 + 8))
             .and_then(|header_size| len.checked_sub(header_size))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, Error::Header.compat()))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, Error::Header))?;
         file.seek(SeekFrom::Start(index_start))?;
         let mut values = BTreeMap::new();
         let mut end = 0;
@@ -153,7 +152,7 @@ impl Writer<File> {
             let start = file.read_u64::<LittleEndian>()?;
             let len = file.read_u64::<LittleEndian>()?;
             if start.checked_add(len).map_or(true, |x| x > index_start) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Index(i).compat()));
+                return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Index(i)));
             }
             values.insert(key.into(), (start, len));
             end = end.max(start + len);
@@ -182,14 +181,14 @@ impl Writer<File> {
     }
 }
 
-#[derive(Debug, Fail, Eq, PartialEq)]
+#[derive(Debug, Error, Eq, PartialEq)]
 /// Error generated when processing a malformed archive.
 pub enum Error {
     /// Malformed archive header.
-    #[fail(display = "malformed header")]
+    #[error(display = "malformed header")]
     Header,
     /// Malformed archive index entry.
-    #[fail(display = "index entry {} is malformed", _0)]
+    #[error(display = "index entry {} is malformed", _0)]
     Index(u64),
 }
 
