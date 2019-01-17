@@ -17,19 +17,18 @@
 //! assert!(reader.get(b"bad").is_none());
 //! ```
 
-
 #![warn(missing_docs)]
 
 extern crate byteorder;
 #[macro_use]
 extern crate err_derive;
 
-use std::io::{self, Read, Seek, SeekFrom};
-use std::fs::File;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 
-use byteorder::{LittleEndian, BigEndian, WriteBytesExt, ReadBytesExt, ByteOrder};
+use byteorder::{BigEndian, ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 
 /// Archive encoder.
 ///
@@ -53,7 +52,8 @@ pub struct Writer<T> {
 }
 
 impl<T> io::Write for Writer<T>
-    where T: io::Write
+where
+    T: io::Write,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let n = self.inner.write(buf)?;
@@ -61,23 +61,31 @@ impl<T> io::Write for Writer<T>
         Ok(n)
     }
 
-    fn flush(&mut self) -> io::Result<()> { self.inner.flush() }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 impl<T> Writer<T> {
     /// Access the inner value
-    pub fn get_ref(&self) -> &T { &self.inner }
+    pub fn get_ref(&self) -> &T {
+        &self.inner
+    }
     /// Access the inner value mutably
-    pub fn get_mut(&mut self) -> &mut T { &mut self.inner }
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
 }
 
 impl<T> Writer<T>
-    where T: io::Write
+where
+    T: io::Write,
 {
     /// Create a new writer using keys of `key_len` bytes and writing data to `inner`.
     pub fn new(key_len: u32, inner: T) -> Self {
         Writer {
-            inner, key_len,
+            inner,
+            key_len,
             value_end: 0,
             cursor: 0,
             values: BTreeMap::new(),
@@ -91,8 +99,15 @@ impl<T> Writer<T>
     /// This is done after writing a value so that the the key can be computed from the value (for example, by a hash
     /// function) without multiple passes.
     pub fn finish_value(&mut self, key: &[u8]) {
-        assert_eq!(key.len(), self.key_len as usize, "key sizes must be constant");
-        self.values.insert(key.to_vec().into(), (self.value_end, self.cursor - self.value_end));
+        assert_eq!(
+            key.len(),
+            self.key_len as usize,
+            "key sizes must be constant"
+        );
+        self.values.insert(
+            key.to_vec().into(),
+            (self.value_end, self.cursor - self.value_end),
+        );
         self.value_end = self.cursor;
     }
 
@@ -102,7 +117,9 @@ impl<T> Writer<T>
     }
 
     /// Length of keys used by this archive.
-    pub fn key_len(&self) -> u32 { self.key_len }
+    pub fn key_len(&self) -> u32 {
+        self.key_len
+    }
 
     /// Compensate for all written data after the last `finish_value` call being discarded from the underlying
     /// `io::Write`.
@@ -121,7 +138,8 @@ impl<T> Writer<T>
             self.inner.write_u64::<LittleEndian>(start as u64)?;
             self.inner.write_u64::<LittleEndian>(len as u64)?;
         }
-        self.inner.write_u64::<LittleEndian>(self.values.len() as u64)?;
+        self.inner
+            .write_u64::<LittleEndian>(self.values.len() as u64)?;
         self.inner.write_u32::<LittleEndian>(self.key_len)?;
         Ok(())
     }
@@ -135,11 +153,14 @@ impl Writer<File> {
     /// with a new value, the storage for the old value will remain allocated.
     pub fn open(mut file: File) -> io::Result<(Self, Vec<u8>)> {
         let len = file.metadata()?.len();
-        if len < 8 { return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header)); }
-        file.seek(SeekFrom::Start(len-12))?;
+        if len < 8 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, Error::Header));
+        }
+        file.seek(SeekFrom::Start(len - 12))?;
         let index_len = file.read_u64::<LittleEndian>()?;
         let key_len = file.read_u32::<LittleEndian>()?;
-        let index_start = index_len.checked_mul(key_len as u64 + 16)
+        let index_start = index_len
+            .checked_mul(key_len as u64 + 16)
             .and_then(|index_size| index_size.checked_add(4 + 8))
             .and_then(|header_size| len.checked_sub(header_size))
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, Error::Header))?;
@@ -163,13 +184,16 @@ impl Writer<File> {
         file.read_exact(&mut ext[..])?;
         file.seek(SeekFrom::Start(end))?;
         file.set_len(end)?;
-        Ok((Self {
-            inner: file,
-            key_len,
-            value_end: end,
-            cursor: end,
-            values,
-        }, ext))
+        Ok((
+            Self {
+                inner: file,
+                key_len,
+                value_end: end,
+                cursor: end,
+                values,
+            },
+            ext,
+        ))
     }
 
     /// Discard data written since the last `finish_value`.
@@ -207,9 +231,13 @@ pub struct Reader<T> {
 
 impl<T> Reader<T> {
     /// Access the inner value
-    pub fn get_ref(&self) -> &T { &self.data }
+    pub fn get_ref(&self) -> &T {
+        &self.data
+    }
     /// Access the inner value mutably
-    pub fn get_mut(&mut self) -> &mut T { &mut self.data }
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
 }
 
 fn key_to_u64(key: &[u8]) -> u64 {
@@ -220,19 +248,26 @@ fn key_to_u64(key: &[u8]) -> u64 {
 }
 
 impl<T> Reader<T>
-    where T: AsRef<[u8]>
+where
+    T: AsRef<[u8]>,
 {
     /// Create a `Reader` for an in-memory archive.
     pub fn new(data: T) -> Result<Self, Error> {
         let len = data.as_ref().len();
-        if len < 8 { return Err(Error::Header); }
+        if len < 8 {
+            return Err(Error::Header);
+        }
         let result = Self { data };
         let header_size = result.header_size().ok_or(Error::Header)?;
-        if header_size > len as u64 { return Err(Error::Header); }
+        if header_size > len as u64 {
+            return Err(Error::Header);
+        }
         for i in 0..result.len() {
             let (_, start, entry_len) = result.index_entry(i);
             if let Some(x) = start.checked_add(entry_len) {
-                if x > (len as u64 - header_size) { return Err(Error::Index(i)); }
+                if x > (len as u64 - header_size) {
+                    return Err(Error::Index(i));
+                }
             } else {
                 return Err(Error::Index(i));
             }
@@ -246,7 +281,9 @@ impl<T> Reader<T>
     /// - if `key.len() != self.key_len()`
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
         assert_eq!(key.len(), self.key_len() as usize, "key size mismatch");
-        if self.len() == 0 { return None; }
+        if self.len() == 0 {
+            return None;
+        }
         let mut high = self.len() - 1;
         let mut low = 0;
         let approx_key = key_to_u64(key);
@@ -254,17 +291,27 @@ impl<T> Reader<T>
         while high != low {
             let approx_low = key_to_u64(self.index_entry(low).0);
             let approx_high = key_to_u64(self.index_entry(high).0);
-            if approx_key < approx_low || approx_key > approx_high { return None; }
+            if approx_key < approx_low || approx_key > approx_high {
+                return None;
+            }
             let mid = low + (approx_key - approx_low) / ((approx_high - approx_low) / (high - low));
             let (entry, start, len) = self.index_entry(mid);
             match entry.cmp(key) {
-                Ordering::Less => { low = mid + 1; }
-                Ordering::Greater => { high = mid - 1; }
-                Ordering::Equal => { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
+                Ordering::Less => {
+                    low = mid + 1;
+                }
+                Ordering::Greater => {
+                    high = mid - 1;
+                }
+                Ordering::Equal => {
+                    return Some(&self.data.as_ref()[start as usize..(start + len) as usize]);
+                }
             }
         }
         let (entry, start, len) = self.index_entry(low);
-        if entry == key { return Some(&self.data.as_ref()[start as usize..(start+len) as usize]); }
+        if entry == key {
+            return Some(&self.data.as_ref()[start as usize..(start + len) as usize]);
+        }
         None
     }
 
@@ -278,7 +325,13 @@ impl<T> Reader<T>
     }
 
     /// Returns `None` if header size overflows
-    fn header_size(&self) -> Option<u64> { Some(self.len().checked_mul(self.key_len() as u64 + 16)?.checked_add(8 + 4)?) }
+    fn header_size(&self) -> Option<u64> {
+        Some(
+            self.len()
+                .checked_mul(self.key_len() as u64 + 16)?
+                .checked_add(8 + 4)?,
+        )
+    }
 
     fn index_entry(&self, i: u64) -> (&[u8], u64, u64) {
         let key_len = self.key_len() as usize;
@@ -287,8 +340,12 @@ impl<T> Reader<T>
         let index_end = data.len() - 8 - 4;
         let index_start = index_end - self.len() as usize * row_size;
         let index = &data[index_start..index_end];
-        let entry = &index[i as usize * row_size..(i as usize + 1)*row_size];
-        (&entry[0..key_len], LittleEndian::read_u64(&entry[key_len..key_len+8]), LittleEndian::read_u64(&entry[key_len+8..key_len+16]))
+        let entry = &index[i as usize * row_size..(i as usize + 1) * row_size];
+        (
+            &entry[0..key_len],
+            LittleEndian::read_u64(&entry[key_len..key_len + 8]),
+            LittleEndian::read_u64(&entry[key_len + 8..key_len + 16]),
+        )
     }
 
     /// Number of key-value pairs in the archive.
@@ -304,7 +361,9 @@ impl<T> Reader<T>
     }
 
     /// Walk the archive's contents.
-    pub fn iter(&self) -> Iter<T> { self.into_iter() }
+    pub fn iter(&self) -> Iter<T> {
+        self.into_iter()
+    }
 }
 
 /// Iterator over a `Reader`'s contents.
@@ -314,23 +373,35 @@ pub struct Iter<'a, T: 'a> {
 }
 
 impl<'a, T> Iterator for Iter<'a, T>
-    where T: AsRef<[u8]>
+where
+    T: AsRef<[u8]>,
 {
     type Item = (&'a [u8], &'a [u8]);
     fn next(&mut self) -> Option<Self::Item> {
-        if self.cursor == self.reader.len() { return None; }
+        if self.cursor == self.reader.len() {
+            return None;
+        }
         let (entry, start, len) = self.reader.index_entry(self.cursor);
         self.cursor += 1;
-        Some((entry, &self.reader.data.as_ref()[start as usize..(start+len) as usize]))
+        Some((
+            entry,
+            &self.reader.data.as_ref()[start as usize..(start + len) as usize],
+        ))
     }
 }
 
 impl<'a, T> IntoIterator for &'a Reader<T>
-    where T: AsRef<[u8]>
+where
+    T: AsRef<[u8]>,
 {
     type Item = (&'a [u8], &'a [u8]);
     type IntoIter = Iter<'a, T>;
-    fn into_iter(self) -> Iter<'a, T> { Iter { reader: self, cursor: 0 } }
+    fn into_iter(self) -> Iter<'a, T> {
+        Iter {
+            reader: self,
+            cursor: 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -338,10 +409,7 @@ mod test {
     use super::*;
     use std::io::Write;
 
-    const VALUES: &[(&[u8], &[u8])] =
-        &[(b"abc", b"123"),
-          (b"def", b"456"),
-          (b"ghi", b"789")];
+    const VALUES: &[(&[u8], &[u8])] = &[(b"abc", b"123"), (b"def", b"456"), (b"ghi", b"789")];
 
     #[test]
     fn roundtrip() {
